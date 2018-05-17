@@ -1,79 +1,94 @@
-import pyaudio
+
+#https://www.reddit.com/r/learnpython/comments/56lfyr/recognizing_multiple_musical_notes_through_the/
+#https://mzucker.github.io/2016/08/07/ukulele-tuner.html
+
+
+
 import numpy as np
+import pyaudio
 
-CHUNK = 2**11
-RATE = 44100
+######################################################################
+# Feel free to play with these numbers. Might want to change NOTE_MIN
+# and NOTE_MAX especially for guitar/bass. Probably want to keep
+# FRAME_SIZE and FRAMES_PER_FFT to be powers of two.
 
-notes = dict({
-    55:"(LOW)",
-    65.41:"C2",
-    69.3:"C#2",
-    73.42:"D2",
-    77.78:"D#2",
-    82.41:"E2",
-    87.31:"F2",
-    92.5:"F#2",
-    98:"G2",
-    103.83:"G#2",
-    110:"A2",
-    116.54:"A#2",
-    123.47:"B2",
-    130.81:"C3",
-    138.59:"C#3",
-    146.83:"D3",
-    155.56:"D#3",
-    164.81:"E3",
-    174.61:"F3",
-    185:"F#3",
-    196:"G3",
-    207.65:"G#3",
-    220:"A3",
-    233.08:"A#3",
-    246.94:"B3",
-    261.63:"C4",
-    277.18:"C#4",
-    293.66:"D4",
-    311.13:"D#4",
-    329.63:"E4",
-    349.23:"F4",
-    369.99:"F#4",
-    392:"G4",
-    415.3:"G#4",
-    440:"A4",
-    466.16:"A#4",
-    493.88:"B4",
-    523.25:"C5",
-    554.37:"C#5",
-    587.33:"D5",
-    622.25:"D#5",
-    659.26:"E5",
-    698.46:"F5",
-    739.99:"F#5",
-    783.99:"G5",
-    830.61:"G#5",
-    880:"A5",
-    932.33:"A#5",
-    987.77:"B5",
-    1046.5:"C6",
-    1108.7:"C#6",
-    1174.7:"D6",
-    1244.5:"D#6",
-    1318.5:"E6",
-    1400:"(HIGH)"
-})
+NOTE_MIN = 60       # C4
+NOTE_MAX = 69       # A4
+FSAMP = 22050       # Sampling frequency in Hz
+FRAME_SIZE = 1048   # How many samples per frame?
+FRAMES_PER_FFT = 16 # FFT takes average across how many frames?
 
-p=pyaudio.PyAudio()
-stream=p.open(format=pyaudio.paInt16,channels=1,rate=RATE,input=True,
-              frames_per_buffer=CHUNK)
+######################################################################
+# Derived quantities from constants above. Note that as
+# SAMPLES_PER_FFT goes up, the frequency step size decreases (so
+# resolution increases); however, it will incur more delay to process
+# new sounds.
 
-for i in range(int(1000*44100/1024)): #open stream time
-    data = np.fromstring(stream.read(CHUNK),dtype=np.int16)
-    peak=np.average(np.abs(data))*2
-    bars="#"*int(50*peak/2**16)
-    print("%04d %05d %s"%(i,peak,bars))
+SAMPLES_PER_FFT = FRAME_SIZE*FRAMES_PER_FFT
+FREQ_STEP = float(FSAMP)/SAMPLES_PER_FFT
 
-    #TBD NOTE DETECTION 
+######################################################################
+# For printing out notes
 
-stream.stop_stream()
-stream.close()
-p.terminate()
+NOTE_NAMES = 'C C# D D# E F F# G G# A A# B'.split()
+
+######################################################################
+# These three functions are based upon this very useful webpage:
+# https://newt.phys.unsw.edu.au/jw/notes.html
+
+def freq_to_number(f): return 69 + 12*np.log2(f/440.0)
+def number_to_freq(n): return 440 * 2.0**((n-69)/12.0)
+def note_name(n): return NOTE_NAMES[n % 12] + str(n/12 - 1)
+
+######################################################################
+# Ok, ready to go now.
+
+# Get min/max index within FFT of notes we care about.
+# See docs for numpy.rfftfreq()
+def note_to_fftbin(n): return number_to_freq(n)/FREQ_STEP
+imin = max(0, int(np.floor(note_to_fftbin(NOTE_MIN-1))))
+imax = min(SAMPLES_PER_FFT, int(np.ceil(note_to_fftbin(NOTE_MAX+1))))
+
+# Allocate space to run an FFT. 
+buf = np.zeros(SAMPLES_PER_FFT, dtype=np.float32)
+num_frames = 0
+
+# Initialize audio
+stream = pyaudio.PyAudio().open(format=pyaudio.paInt16,
+                                channels=1,
+                                rate=FSAMP,
+                                input=True,
+                                frames_per_buffer=FRAME_SIZE)
+
+stream.start_stream()
+
+# Create Hanning window function
+window = 0.5 * (1 - np.cos(np.linspace(0, 2*np.pi, SAMPLES_PER_FFT, False)))
+
+# Print initial text
+print 'sampling at', FSAMP, 'Hz with max resolution of', FREQ_STEP, 'Hz'
+print
+
+# As long as we are getting data:
+while stream.is_active():
+
+    # Shift the buffer down and new data in
+    buf[:-FRAME_SIZE] = buf[FRAME_SIZE:]
+    buf[-FRAME_SIZE:] = np.fromstring(stream.read(FRAME_SIZE), np.int16)
+
+    # Run the FFT on the windowed buffer
+    fft = np.fft.rfft(buf * window)
+
+    # Get frequency of maximum response in range
+    freq = (np.abs(fft[imin:imax]).argmax() + imin) * FREQ_STEP
+
+    # Get note number and nearest note
+    n = freq_to_number(freq)
+    n0 = int(round(n))
+
+    # Console output once we have a full buffer
+    num_frames += 1
+
+    if num_frames >= FRAMES_PER_FFT:
+        print 'freq: {:7.2f} Hz     note: {:>3s} {:+.2f}'.format(
+            freq, note_name(n0), n-n0)
