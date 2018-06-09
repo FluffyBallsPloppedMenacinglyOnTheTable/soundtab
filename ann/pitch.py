@@ -1,4 +1,4 @@
-
+#https://www.johndcook.com/blog/2016/02/10/musical-pitch-notation/
 import numpy as np
 import pyaudio
 
@@ -9,11 +9,12 @@ p=pyaudio.PyAudio()
 stream=p.open(format=pyaudio.paInt16,channels=1,rate=RATE,input=True,
               frames_per_buffer=CHUNK)
 
-for i in range(int(1000*44100/1024)): #open stream time
+while stream.is_active():
     data = np.fromstring(stream.read(CHUNK),dtype=np.int16)
     peak=np.average(np.abs(data))*2
     bars="#"*int(50*peak/2**16)
-    print("%04d %05d %s"%(i,peak,bars))
+    print("%05d %s"%(peak,bars))
+    #print(stream.read(CHUNK))
 
     #TBD NOTE DETECTION 
 
